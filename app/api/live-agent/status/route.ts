@@ -4,23 +4,24 @@ import { LiveChatDb } from '@/lib/live-chat-db';
 export async function POST(request: Request) {
 	try {
 		const body = await request.json();
-		const { sessionId, status } = body;
+		const BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8000';
 
-		if (!sessionId || !status) {
-			return NextResponse.json({ error: 'Missing required fields (sessionId, status)' }, { status: 400 });
+		const res = await fetch(`${BACKEND_URL}/api/livechat/status`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body)
+		});
+
+		if (!res.ok) {
+			const text = await res.text();
+			console.error("Backend Error in status:", text);
+			return NextResponse.json({ error: 'Backend failed to update status' }, { status: res.status });
 		}
 
-		if (status === 'resolved') {
-			const success = await LiveChatDb.resolveSession(sessionId);
-			if (!success) {
-				return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-			}
-			return NextResponse.json({ success: true, status: 'resolved' });
-		}
-
-		return NextResponse.json({ error: 'Invalid status update action' }, { status: 400 });
+		const data = await res.json();
+		return NextResponse.json(data);
 	} catch (error) {
-		console.error("Error in status update API route:", error);
+		console.error("Error proxying status API route to backend:", error);
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
 	}
 }

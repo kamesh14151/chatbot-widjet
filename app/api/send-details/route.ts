@@ -100,11 +100,11 @@ export async function POST(req: NextRequest) {
 
 			if (!brevoRes.ok) {
 				const errText = await brevoRes.text();
-				console.error("Brevo API Error:", errText);
-				throw new Error("Failed to send email via Brevo API");
+				console.warn("Brevo API Warning (Email not sent):", errText);
+				// We don't throw an error here, so the student can still connect to the live agent even if admin notifications fail.
+			} else {
+				console.log(`Email sent via Brevo API to ${leadEmailTo} for lead: ${name}`);
 			}
-			
-			console.log(`Email sent via Brevo API to ${leadEmailTo} for lead: ${name}`);
 		} else {
 			console.log("-----------------------------------------");
 			console.log("Lead captured (No Brevo API Key configured):");

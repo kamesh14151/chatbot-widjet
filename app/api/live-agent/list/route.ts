@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { LiveChatDb } from '@/lib/live-chat-db';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
 	try {
 		const sessionsObj = await LiveChatDb.getSessions();

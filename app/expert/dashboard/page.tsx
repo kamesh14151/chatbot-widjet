@@ -1,19 +1,14 @@
 "use client";
 
-// Expert Dashboard — same functionality as Agent Dashboard
-// but branded for "Expert" role and redirects to /expert/login
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { SearchIcon, Loader2Icon, SendIcon, CheckCircleIcon, UsersIcon, DatabaseIcon } from 'lucide-react';
+import { 
+	SearchIcon, Loader2Icon, SendIcon, CheckCircleIcon, 
+	DatabaseIcon, LogOutIcon, MessageSquareIcon, HeadsetIcon,
+	PlusIcon, ArrowUpIcon, ImageIcon
+} from 'lucide-react';
 import { ChatSession, ChatMessage } from '@/lib/live-chat-db';
-
-interface DbStatus {
-	connected: boolean;
-	status: 'ready' | 'no_tables' | 'misconfigured' | 'error' | 'checking';
-	message: string;
-	latencyMs: number | null;
-	checkedAt: string;
-}
+import { getSocket } from '@/lib/socket';
 
 export default function ExpertDashboard() {
 	const router = useRouter();
@@ -22,72 +17,54 @@ export default function ExpertDashboard() {
 	const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
 	const [replyText, setReplyText] = useState('');
 	const [searchQuery, setSearchQuery] = useState('');
-	const [lastSyncTime, setLastSyncTime] = useState('');
 	const [sending, setSending] = useState(false);
 	const [expertEmail, setExpertEmail] = useState('expert@sona.com');
 	const messagesEndRef = useRef<HTMLDivElement>(null);
-	const [dbStatus, setDbStatus] = useState<DbStatus>({
-		connected: false,
-		status: 'checking',
-		message: 'Checking connection…',
-		latencyMs: null,
-		checkedAt: '',
-	});
+	const [dbError, setDbError] = useState<string | null>(null);
 
-	// Auth check — expert role required
 	useEffect(() => {
-		const isLoggedIn = sessionStorage.getItem('agent_logged_in') === 'true';
-		const role = sessionStorage.getItem('agent_role');
-		if (!isLoggedIn || (role !== 'expert' && role !== 'admin')) {
-			router.push('/agent/login?role=expert');
-			return;
-		}
-		const email = sessionStorage.getItem('agent_email') || 'expert@sona.com';
-		setExpertEmail(email);
+		const checkAuth = async () => {
+			try {
+				const res = await fetch('/api/auth/me');
+				if (res.ok) {
+					const data = await res.json();
+					if (data.user.role !== 'expert' && data.user.role !== 'admin') {
+						router.push('/login');
+					}
+					setExpertEmail(data.user.email);
+				} else {
+					router.push('/login');
+				}
+			} catch (e) {
+				router.push('/login');
+			}
+		};
+		checkAuth();
 	}, [router]);
-
-	const checkDbStatus = async () => {
-		try {
-			const res = await fetch('/api/db-status');
-			if (!res.ok) throw new Error('Failed to reach DB status API');
-			const data: DbStatus = await res.json();
-			setDbStatus(data);
-		} catch {
-			setDbStatus(prev => ({
-				...prev,
-				connected: false,
-				status: 'error',
-				message: 'Could not reach status endpoint.',
-				checkedAt: new Date().toISOString(),
-			}));
-		}
-	};
-
-	useEffect(() => {
-		checkDbStatus();
-		const interval = setInterval(checkDbStatus, 10000);
-		return () => clearInterval(interval);
-	}, []);
 
 	const fetchSessions = async (selectFirst = false) => {
 		try {
 			const res = await fetch('/api/live-agent/list');
-			if (!res.ok) throw new Error('Failed to fetch sessions');
+			if (!res.ok) throw new Error('Database connection failed');
 			const list: ChatSession[] = await res.json();
 			setSessions(list);
-			setLastSyncTime(new Date().toLocaleString());
+			setDbError(null);
 			if (selectFirst && list.length > 0 && !selectedSessionId) {
 				setSelectedSessionId(list[0].id);
 			}
 		} catch (error) {
 			console.error('Error fetching sessions list:', error);
+			setDbError("Unable to connect to the database. Please check your connection.");
 		}
 	};
 
 	useEffect(() => {
 		fetchSessions(true);
-		const interval = setInterval(() => fetchSessions(), 2000);
-		return () => clearInterval(interval);
+		const socket = getSocket();
+		socket.emit('join_admin');
+		const handleUpdate = () => fetchSessions();
+		socket.on('session_updated', handleUpdate);
+		return () => { socket.off('session_updated', handleUpdate); };
 	}, [selectedSessionId]);
 
 	const fetchActiveSessionDetail = async () => {
@@ -120,11 +97,20 @@ export default function ExpertDashboard() {
 		}
 	};
 
-	useEffect(() => { fetchActiveSessionDetail(); }, [selectedSessionId, sessions]);
 	useEffect(() => {
 		if (!selectedSessionId) return;
-		const interval = setInterval(() => fetchActiveSessionDetail(), 1000);
-		return () => clearInterval(interval);
+		fetchActiveSessionDetail();
+		const socket = getSocket();
+		socket.emit('join_session', selectedSessionId);
+		const handleNewMessage = (data: any) => {
+			if (data?.sessionId === selectedSessionId) fetchActiveSessionDetail();
+		};
+		socket.on('new_message', handleNewMessage);
+		socket.on('status_updated', handleNewMessage);
+		return () => {
+			socket.off('new_message', handleNewMessage);
+			socket.off('status_updated', handleNewMessage);
+		};
 	}, [selectedSessionId]);
 
 	useEffect(() => {
@@ -174,9 +160,9 @@ export default function ExpertDashboard() {
 		setActiveSession(null);
 	};
 
-	const handleLogout = () => {
-		sessionStorage.clear();
-		router.push('/expert');
+	const handleLogout = async () => {
+		await fetch('/api/auth/logout', { method: 'POST' });
+		router.push('/login');
 	};
 
 	const filteredSessions = sessions.filter(s => {
@@ -184,230 +170,249 @@ export default function ExpertDashboard() {
 		return s.id.toLowerCase().includes(q) || s.userName.toLowerCase().includes(q) || s.userEmail.toLowerCase().includes(q);
 	});
 
-	const waitingCount = sessions.filter(s => s.status === 'waiting').length;
-	const activeCount = sessions.filter(s => s.status === 'active').length;
-
-	const formatTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-	const formatDate = (ts: number) => new Date(ts).toLocaleString();
-	const getWaitTime = (s: ChatSession) => `${Math.floor((Date.now() - s.createdAt) / 60000)}m`;
+	const formatTime = (ts: number) => {
+		return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+	};
 
 	return (
-		<div className="min-h-screen bg-[#edf3f6] dark:bg-zinc-950 flex flex-col font-sans text-slate-800 dark:text-zinc-100">
-			<header className="bg-[#fff7cd] dark:bg-zinc-900 border-b border-[#ebd7a3] dark:border-zinc-800 px-6 py-4 flex items-center shrink-0">
-				<h1 className="text-sm font-bold tracking-wide uppercase">SONA SCALE UWA — Expert Console</h1>
+		<div className="h-screen w-full flex flex-col font-sans bg-gradient-to-br from-slate-100 to-slate-200 text-slate-800 overflow-hidden">
+			
+			{/* DB Error Toast */}
+			{dbError && (
+				<div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 px-5 py-3.5 rounded-2xl shadow-xl backdrop-blur-md text-sm font-bold flex items-center gap-3 animate-in slide-in-from-top-4 duration-300 bg-rose-600/90 text-white">
+					<DatabaseIcon className="w-4 h-4 shrink-0" />
+					{dbError}
+					<button onClick={() => setDbError(null)} className="ml-2 bg-rose-700/50 hover:bg-rose-700 p-1.5 rounded-full transition-colors">
+						<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+					</button>
+				</div>
+			)}
+
+			{/* Global Header (Matching Admin Dashboard) */}
+			<header className="bg-white/70 backdrop-blur-2xl border-b border-white/40 px-8 py-5 flex items-center justify-between shrink-0 sticky top-0 z-30 shadow-[0_4px_24px_rgba(0,0,0,0.02)]">
+				<div className="flex items-center gap-4">
+					<div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#003859] to-sky-600 text-white flex items-center justify-center shadow-lg shadow-[#003859]/20 border border-white/20">
+						<HeadsetIcon className="w-5 h-5" />
+					</div>
+					<div>
+						<h1 className="text-lg font-black tracking-tight text-[#003859]">Expert Dashboard</h1>
+						<p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">SCALE UWA • Live Support</p>
+					</div>
+				</div>
+				<div className="flex items-center gap-4">
+					<div className="flex items-center gap-3 mr-4 border-r border-slate-200/60 pr-8 py-1">
+						<div className="w-9 h-9 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center font-bold text-sm shadow-sm border border-white">
+							{expertEmail.charAt(0).toUpperCase()}
+						</div>
+						<div className="flex flex-col">
+							<span className="text-sm font-bold text-slate-700 line-clamp-1 max-w-[150px]">{expertEmail}</span>
+							<span className="text-[10px] font-bold text-emerald-500 uppercase tracking-wider">Online</span>
+						</div>
+					</div>
+					<button
+						onClick={handleLogout}
+						className="flex items-center gap-2 px-4 py-2.5 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200/60 rounded-full transition-all cursor-pointer shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0"
+					>
+						<LogOutIcon className="w-3.5 h-3.5" /> Logout
+					</button>
+				</div>
 			</header>
 
-			<div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-				{/* Sidebar */}
-				<aside className="w-full md:w-[350px] bg-white dark:bg-zinc-900 border-r border-slate-200 dark:border-zinc-800 flex flex-col shrink-0 overflow-hidden">
-					<div className="p-5 border-b border-slate-100 dark:border-zinc-850 flex flex-col gap-4">
-						<div className="flex items-center justify-between">
-							<div>
-								<span className="text-[10px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-widest block">EXPERT PORTAL</span>
-								<h2 className="text-xl font-bold text-[#003859] dark:text-zinc-200 leading-none mt-1">Expert Console</h2>
-								<p className="text-[10px] text-slate-500 dark:text-zinc-400 mt-1">Manage live conversations.</p>
-							</div>
-							<div className="flex items-center gap-1.5 shrink-0">
-								<button
-									onClick={checkDbStatus}
-									className="px-2.5 py-1 text-[10px] font-bold text-white bg-[#003859] hover:bg-[#002b45] rounded-lg transition-all cursor-pointer shadow-sm"
-									title="Refresh DB status"
-								>
-									Status
-								</button>
-								<button
-									onClick={handleLogout}
-									className="px-2.5 py-1 text-[10px] font-bold text-slate-600 dark:text-zinc-300 border border-slate-200 dark:border-zinc-800 rounded-lg hover:bg-slate-50 transition-all cursor-pointer"
-								>
-									Logout
-								</button>
+			{/* Main Workspace */}
+			<div className="flex-1 p-4 md:p-8 overflow-hidden flex flex-col max-w-[1920px] mx-auto w-full">
+				
+				{/* The Premium Glassmorphism Container */}
+				<div className="flex-1 w-full bg-white/70 backdrop-blur-xl border border-white/60 shadow-xl shadow-slate-200/40 rounded-3xl overflow-hidden flex flex-col md:flex-row">
+					
+					{/* LEFT PANE (Chat List) */}
+					<aside className="w-full md:w-[320px] lg:w-[380px] flex flex-col bg-slate-50/50 border-r border-slate-200/60 shrink-0">
+						
+						{/* Search Bar */}
+						<div className="p-5 border-b border-slate-200/60 shrink-0">
+							<div className="flex-1 bg-white/80 backdrop-blur-sm rounded-xl h-11 flex items-center px-4 gap-3 border border-slate-200/60 shadow-sm focus-within:ring-2 focus-within:ring-[#003859]/20 focus-within:border-[#003859] transition-all shadow-[inset_0_2px_4px_rgba(0,0,0,0.01)]">
+								<SearchIcon className="w-4 h-4 text-slate-400" />
+								<input 
+									type="text" 
+									value={searchQuery}
+									onChange={e => setSearchQuery(e.target.value)}
+									placeholder="Search student chats..." 
+									className="flex-1 bg-transparent border-none focus:outline-none text-[13px] text-slate-800 placeholder-slate-400 w-full font-medium"
+								/>
 							</div>
 						</div>
 
-						{/* Metrics */}
-						<div className="grid grid-cols-2 gap-2.5">
-							<div className="bg-slate-50 dark:bg-zinc-800 border border-slate-100 p-2.5 rounded-xl text-left shadow-sm">
-								<div className="text-[8px] font-bold text-slate-400 uppercase tracking-wide">QUEUE</div>
-								<div className="text-lg font-black text-slate-800 dark:text-zinc-100 leading-none mt-1">{waitingCount + activeCount}</div>
-							</div>
-							<div className="bg-slate-50 dark:bg-zinc-800 border border-slate-100 p-2.5 rounded-xl text-left shadow-sm flex flex-col justify-between">
-								<div className="text-[8px] font-bold text-slate-400 uppercase tracking-wide">SOCKET</div>
-								<div className="flex items-center gap-1.5 mt-1">
-									<span className="relative flex h-2 w-2">
-										<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-										<span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-									</span>
-									<span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">Online</span>
-								</div>
-							</div>
-							{/* DB Status */}
-							<div
-								title={dbStatus.message}
-								className={`col-span-2 p-2.5 rounded-xl text-left shadow-sm border flex items-center justify-between gap-2 cursor-default transition-colors ${
-									dbStatus.status === 'checking' ? 'bg-slate-50 dark:bg-zinc-800 border-slate-100' :
-									dbStatus.connected && dbStatus.status === 'ready' ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200' :
-									'bg-red-50 dark:bg-red-950/30 border-red-200'
-								}`}
-							>
-								<div className="flex items-center gap-2">
-									<DatabaseIcon className={`w-3.5 h-3.5 shrink-0 ${dbStatus.connected ? 'text-emerald-500' : 'text-red-500'}`} />
-									<div>
-										<div className="text-[8px] font-bold text-slate-400 uppercase tracking-wide">DATABASE</div>
-										<div className={`text-[10px] font-bold mt-0.5 ${dbStatus.connected ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
-											{dbStatus.status === 'ready' ? 'Connected & Ready' : dbStatus.status === 'checking' ? 'Checking…' : 'Disconnected'}
+						{/* Conversations List */}
+						<div className="flex-1 overflow-y-auto bg-transparent p-3 flex flex-col gap-2">
+							{filteredSessions.length === 0 ? (
+								<div className="text-center text-sm font-medium text-slate-400 p-8 mt-4">No active chats found.</div>
+							) : filteredSessions.map(session => {
+								const isSelected = session.id === selectedSessionId;
+								const lastMsg = session.messages?.length ? session.messages[session.messages.length - 1] : null;
+								const lastMessageText = lastMsg ? lastMsg.text : 'New connection...';
+								const time = lastMsg ? formatTime(lastMsg.timestamp) : formatTime(session.createdAt);
+								const isWaiting = session.status === 'waiting';
+
+								return (
+									<button
+										key={session.id}
+										onClick={() => setSelectedSessionId(session.id)}
+										className={`w-full text-left p-3.5 rounded-2xl transition-all flex items-center gap-4 cursor-pointer group ${
+											isSelected 
+												? 'bg-white shadow-sm border border-slate-200/60 ring-1 ring-slate-200/50' 
+												: 'hover:bg-white/60 bg-transparent border border-transparent'
+										}`}
+									>
+										{/* Avatar */}
+										<div className="relative shrink-0">
+											<div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg border ${
+												isSelected 
+													? 'bg-gradient-to-br from-[#003859] to-sky-600 text-white shadow-md shadow-[#003859]/20 border-white/20' 
+													: 'bg-white text-slate-600 border-slate-200/60'
+											}`}>
+												{(session.userName || 'S').charAt(0).toUpperCase()}
+											</div>
+											<div className={`absolute -bottom-1 -right-1 w-4 h-4 border-[3px] border-white rounded-full ${session.status === 'active' ? 'bg-emerald-500' : session.status === 'waiting' ? 'bg-amber-400' : 'bg-slate-300'}`}></div>
+										</div>
+
+										{/* Content */}
+										<div className="flex-1 min-w-0 flex flex-col gap-1">
+											<div className="flex items-center justify-between">
+												<span className="text-[14px] font-black tracking-tight text-slate-900 truncate">{session.userName || session.id}</span>
+												<span className={`text-[10px] font-bold tracking-wider shrink-0 ml-2 ${isSelected ? 'text-[#003859]' : 'text-slate-400'}`}>{time}</span>
+											</div>
+											<div className="flex items-center justify-between gap-2">
+												<p className={`text-[12px] truncate ${isSelected ? 'text-slate-700 font-medium' : 'text-slate-500'}`}>
+													{lastMessageText}
+												</p>
+												{isWaiting && (
+													<span className="w-5 h-5 rounded-full bg-amber-500 text-white text-[10px] font-black flex items-center justify-center shrink-0 shadow-sm shadow-amber-500/20">1</span>
+												)}
+											</div>
+										</div>
+									</button>
+								);
+							})}
+						</div>
+					</aside>
+
+					{/* RIGHT PANE (Chat Area) */}
+					<main className="flex-1 flex flex-col relative bg-white/40 overflow-hidden">
+						{activeSession ? (
+							<>
+								{/* Right Header */}
+								<header className="px-8 py-5 bg-white/60 backdrop-blur-sm flex items-center justify-between shrink-0 relative z-20 border-b border-slate-200/60">
+									<div className="flex items-center gap-4">
+										<div className="w-12 h-12 rounded-xl bg-white border border-slate-200/60 text-slate-700 flex items-center justify-center font-bold text-lg shadow-sm">
+											{(activeSession.userName || 'S').charAt(0).toUpperCase()}
+										</div>
+										<div className="flex flex-col">
+											<span className="text-[15px] font-black tracking-tight text-slate-900">{activeSession.userName || activeSession.id}</span>
+											<span className="text-[12px] font-bold text-slate-500 flex items-center gap-1.5 mt-0.5">
+												<span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Active Student
+											</span>
 										</div>
 									</div>
-								</div>
-								{dbStatus.latencyMs !== null && (
-									<span className="text-[8px] text-slate-400 font-mono">{dbStatus.latencyMs}ms</span>
-								)}
-							</div>
-						</div>
-
-						{/* Search */}
-						<div className="relative">
-							<input
-								type="text"
-								value={searchQuery}
-								onChange={(e) => setSearchQuery(e.target.value)}
-								placeholder="Search sessions..."
-								className="w-full bg-slate-50 dark:bg-zinc-850 border border-slate-100 dark:border-zinc-800 rounded-xl pl-9 pr-4 py-2 text-xs focus:outline-none focus:border-[#003859]"
-							/>
-							<SearchIcon className="absolute left-3 top-2.5 w-3.5 h-3.5 text-slate-400" />
-						</div>
-
-						<div className="text-[9px] text-slate-400 text-center pt-1">Last sync: {lastSyncTime || 'Loading...'}</div>
-					</div>
-
-					{/* Session List */}
-					<div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-zinc-850">
-						{filteredSessions.length === 0 ? (
-							<div className="p-8 text-center text-xs text-slate-400">No active conversations found.</div>
-						) : filteredSessions.map(session => {
-							const isSelected = session.id === selectedSessionId;
-							const lastMessage = session.messages?.length ? session.messages[session.messages.length - 1].text : 'No messages yet.';
-							return (
-								<button
-									key={session.id}
-									onClick={() => setSelectedSessionId(session.id)}
-									className={`w-full text-left p-4 transition-all duration-150 flex flex-col gap-1.5 cursor-pointer relative hover:bg-slate-50/50 dark:hover:bg-zinc-800/30 ${
-										isSelected ? 'bg-gradient-to-r from-sky-50 to-white dark:from-zinc-850 dark:to-zinc-900 border-l-4 border-[#003859]' : 'border-l-4 border-transparent'
-									}`}
-								>
-									<div className="flex items-center justify-between">
-										<span className="text-xs font-bold text-slate-800 dark:text-zinc-200">{session.userName || session.id}</span>
-										<span className={`px-2 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider ${
-											session.status === 'waiting' ? 'bg-amber-100 text-amber-800' :
-											session.status === 'active' ? 'bg-emerald-100 text-emerald-800' :
-											'bg-slate-100 text-slate-600'
-										}`}>{session.status}</span>
+									
+									<div className="flex items-center gap-4">
+										{activeSession.status !== 'resolved' && (
+											<button 
+												onClick={handleMarkResolved} 
+												className="px-5 py-2.5 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold uppercase tracking-wider flex items-center gap-2 hover:bg-emerald-100 transition-all border border-emerald-200 shadow-sm hover:shadow hover:-translate-y-0.5 active:translate-y-0"
+												title="Resolve Chat"
+											>
+												<CheckCircleIcon className="w-4 h-4 text-emerald-500" /> Resolve Session
+											</button>
+										)}
 									</div>
-									<p className="text-[10px] text-slate-500 line-clamp-1">{lastMessage}</p>
-									<div className="flex items-center justify-between text-[9px] text-slate-400 pt-1">
-										<span>{formatDate(session.createdAt)}</span>
-										<span>{getWaitTime(session)}</span>
+								</header>
+
+								{/* Chat History */}
+								<div className="flex-1 overflow-y-auto px-6 md:px-10 py-8 relative z-10 flex flex-col gap-3 pb-28">
+									<div className="flex justify-center my-4 sticky top-0 z-20">
+										<span className="bg-white/80 backdrop-blur-md text-slate-500 text-[10px] px-4 py-1.5 rounded-full shadow-sm font-bold uppercase tracking-widest border border-slate-200/60">
+											Today
+										</span>
 									</div>
-								</button>
-							);
-						})}
-					</div>
-				</aside>
 
-				{/* Main Chat Panel */}
-				<main className="flex-1 bg-slate-50 dark:bg-zinc-950 flex flex-col overflow-hidden">
-					{activeSession ? (
-						<div className="flex-1 flex flex-col overflow-hidden">
-							<div className="bg-white dark:bg-zinc-900 border-b border-slate-200 px-6 py-4 flex items-center justify-between shrink-0">
-								<div>
-									<h2 className="text-sm font-black text-slate-800 dark:text-zinc-100">{activeSession.userName || activeSession.id}</h2>
-									<p className="text-[9.5px] text-slate-500 mt-1">
-										{activeSession.assignedAgent || 'Unassigned'} • {activeSession.status} • {getWaitTime(activeSession)} wait
-									</p>
-								</div>
-								<button
-									onClick={handleMarkResolved}
-									className="bg-[#003859] hover:bg-[#002b45] text-white px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1 cursor-pointer"
-								>
-									<CheckCircleIcon className="w-3.5 h-3.5" /> Mark Resolved
-								</button>
-							</div>
-
-							<div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50 dark:bg-zinc-950/80">
-								{activeSession.messages?.length ? activeSession.messages.map((msg: ChatMessage) => {
-									if (msg.sender === 'system') {
+									{activeSession.messages?.length ? activeSession.messages.map((msg: ChatMessage, index: number) => {
+										if (msg.sender === 'system') {
+											return (
+												<div key={msg.id} className="flex justify-center my-4">
+													<div className="bg-slate-100 text-slate-500 px-5 py-2 rounded-xl text-[11px] font-bold uppercase tracking-wider shadow-sm border border-slate-200/60">
+														{msg.text}
+													</div>
+												</div>
+											);
+										}
+										
+										const isAgent = msg.sender === 'agent';
+										const showTail = index === 0 || activeSession.messages[index - 1]?.sender !== msg.sender;
+										
 										return (
-											<div key={msg.id} className="flex flex-col items-center my-3 mx-auto max-w-[80%]">
-												<div className="bg-[#fff3cd] text-[#856404] px-4 py-2.5 border border-[#ffeeba] rounded-2xl text-[10px] text-center leading-relaxed shadow-sm font-medium">
-													{msg.text}
-													<div className="text-[8px] text-[#856404]/70 mt-0.5">{formatTime(msg.timestamp)}</div>
+											<div key={msg.id} className={`flex w-full ${isAgent ? 'justify-end' : 'justify-start'} ${showTail ? 'mt-4' : 'mt-1'}`}>
+												<div className={`relative max-w-[80%] md:max-w-[70%] px-5 py-3.5 text-[14px] leading-relaxed shadow-sm flex flex-col gap-1.5 ${
+													isAgent 
+														? 'bg-gradient-to-br from-[#003859] to-sky-700 text-white rounded-2xl ' + (showTail ? 'rounded-tr-sm' : '')
+														: 'bg-white text-slate-800 rounded-2xl border border-slate-200/60 ' + (showTail ? 'rounded-tl-sm' : '')
+												}`}>
+													<span className="font-medium">{msg.text}</span>
+													<div className={`flex items-center gap-1.5 self-end text-[10px] font-bold uppercase tracking-wider ${isAgent ? 'text-sky-200' : 'text-slate-400'}`}>
+														{formatTime(msg.timestamp)}
+													</div>
 												</div>
 											</div>
 										);
-									}
-									const isAgent = msg.sender === 'agent';
-									return (
-										<div key={msg.id} className={`flex items-end gap-2.5 ${isAgent ? 'justify-end' : 'justify-start'}`}>
-											{!isAgent && (
-												<div className="w-7 h-7 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-xs font-bold shrink-0">
-													{activeSession.userName ? activeSession.userName.charAt(0).toUpperCase() : 'S'}
-												</div>
-											)}
-											<div className="flex flex-col max-w-[70%]">
-												<div className={`px-4 py-3 rounded-2xl text-xs leading-relaxed shadow-sm ${
-													isAgent ? 'bg-[#003859] text-white rounded-br-none' : 'bg-white dark:bg-zinc-900 text-slate-800 border border-slate-100 rounded-bl-none'
-												}`}>
-													{msg.text}
-												</div>
-												<span className={`text-[8.5px] text-slate-400 mt-1 px-1 ${isAgent ? 'text-right' : 'text-left'}`}>
-													{isAgent ? 'You (Expert)' : msg.senderName} • {formatTime(msg.timestamp)}
-												</span>
-											</div>
-											{isAgent && (
-												<div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-[10px] font-bold shrink-0">EX</div>
-											)}
-										</div>
-									);
-								}) : (
-									<div className="text-center text-xs text-slate-400 py-12">No messages in this session yet.</div>
-								)}
-								<div ref={messagesEndRef} />
-							</div>
-
-							{activeSession.status !== 'resolved' ? (
-								<form onSubmit={handleSendReply} className="p-4 border-t border-slate-200 bg-white dark:bg-zinc-900 flex items-center gap-3 shrink-0">
-									<input
-										type="text"
-										value={replyText}
-										onChange={(e) => setReplyText(e.target.value)}
-										placeholder="Reply to student..."
-										className="flex-1 bg-slate-50 border border-slate-100 rounded-full px-5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-[#003859]"
-									/>
-									<button
-										type="submit"
-										disabled={sending || !replyText.trim()}
-										className="w-10 h-10 rounded-full bg-[#003859] text-white flex items-center justify-center hover:bg-[#002b45] hover:scale-105 active:scale-95 transition-all disabled:opacity-40 cursor-pointer shrink-0"
-									>
-										{sending ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <SendIcon className="w-4 h-4" />}
-									</button>
-								</form>
-							) : (
-								<div className="p-4 bg-slate-100 dark:bg-zinc-900 border-t text-center text-xs text-slate-400 select-none shrink-0 font-medium">
-									This chat session is marked resolved and closed.
+									}) : (
+										<div className="text-center text-sm font-bold text-slate-400 py-12">No messages in this chat yet.</div>
+									)}
+									<div ref={messagesEndRef} />
 								</div>
-							)}
-						</div>
-					) : (
-						<div className="flex-1 flex flex-col items-center justify-center text-center p-8 space-y-3">
-							<div className="w-16 h-16 rounded-full bg-slate-100 dark:bg-zinc-900 flex items-center justify-center border border-slate-200/50">
-								<UsersIcon className="w-6 h-6 text-slate-400" />
+
+								{/* Floating Chat Composer */}
+								{activeSession.status !== 'resolved' ? (
+									<div className="absolute bottom-6 left-6 right-6 z-30">
+										<form 
+											onSubmit={handleSendReply} 
+											className="bg-white/95 backdrop-blur-xl border border-slate-200/80 shadow-[0_8px_30px_rgba(0,0,0,0.06)] rounded-full p-2 flex items-center gap-3 max-w-4xl mx-auto transition-all focus-within:shadow-[0_8px_40px_rgba(0,56,89,0.12)] focus-within:ring-1 focus-within:ring-[#003859]/10"
+										>
+											<input 
+												type="text" 
+												value={replyText}
+												onChange={e => setReplyText(e.target.value)}
+												placeholder="Type your reply..." 
+												className="flex-1 bg-transparent px-5 py-3 text-[14px] text-slate-800 placeholder-slate-400 font-medium focus:outline-none"
+											/>
+											<button 
+												type="submit" 
+												disabled={sending || !replyText.trim()}
+												className="w-11 h-11 rounded-full bg-gradient-to-r from-[#003859] to-sky-600 text-white flex items-center justify-center hover:shadow-lg hover:scale-105 active:scale-95 transition-all disabled:opacity-50 cursor-pointer shrink-0"
+											>
+												{sending ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <ArrowUpIcon className="w-5 h-5" />}
+											</button>
+										</form>
+									</div>
+								) : (
+									<div className="absolute bottom-6 left-6 right-6 z-30 max-w-4xl mx-auto">
+										<div className="p-4 bg-[#202022]/90 backdrop-blur-md border border-white/5 rounded-full text-center text-xs text-zinc-400 font-bold shadow-lg uppercase tracking-widest">
+											This conversation has been resolved.
+										</div>
+									</div>
+								)}
+							</>
+						) : (
+							/* Modern Empty State */
+							<div className="flex-1 flex flex-col items-center justify-center relative z-10">
+								<div className="w-24 h-24 bg-white rounded-[2rem] shadow-xl shadow-[#003859]/5 flex items-center justify-center mb-8 border border-slate-100 rotate-6 hover:rotate-0 transition-transform duration-500">
+									<MessageSquareIcon className="w-10 h-10 text-[#003859]" />
+								</div>
+								<h1 className="text-2xl font-black text-[#003859] tracking-tight">Expert Support Area</h1>
+								<p className="text-slate-500 text-[13px] mt-3 text-center max-w-xs font-medium leading-relaxed">
+									Your secure portal for student communication. Select a conversation to begin assisting.
+								</p>
 							</div>
-							<div>
-								<h3 className="text-sm font-bold text-slate-700 dark:text-zinc-300">Select a Student Conversation</h3>
-								<p className="text-xs text-slate-400 mt-1 max-w-xs leading-normal">Choose a session from the sidebar to start responding.</p>
-							</div>
-						</div>
-					)}
-				</main>
+						)}
+					</main>
+				</div>
 			</div>
 		</div>
 	);

@@ -2,8 +2,13 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { SearchIcon, Loader2Icon, SendIcon, PowerIcon, BarChart2Icon, UsersIcon, ShieldIcon, CheckCircleIcon, DatabaseIcon, MessageSquareIcon, ArrowRightIcon } from 'lucide-react';
+import { 
+	SearchIcon, Loader2Icon, SendIcon, CheckCircleIcon, 
+	ArrowRightIcon, MessageSquareIcon, RefreshCwIcon, LogOutIcon, HeadsetIcon,
+	PlusIcon, ArrowUpIcon, ImageIcon
+} from 'lucide-react';
 import { ChatSession, ChatMessage } from '@/lib/live-chat-db';
+import { getSocket } from '@/lib/socket';
 
 interface DbStatus {
 	connected: boolean;
@@ -20,65 +25,42 @@ export default function AgentDashboard() {
 	const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
 	const [replyText, setReplyText] = useState('');
 	const [searchQuery, setSearchQuery] = useState('');
-	const [reportPeriod, setReportPeriod] = useState('Per Week');
 	const [lastSyncTime, setLastSyncTime] = useState('');
 	const [sending, setSending] = useState(false);
 	const [agentEmail, setAgentEmail] = useState('agent@sona.com');
 	const [agentRole, setAgentRole] = useState('agent');
+	const [dbError, setDbError] = useState<string | null>(null);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
-	const [dbStatus, setDbStatus] = useState<DbStatus>({
-		connected: false,
-		status: 'checking',
-		message: 'Checking connection…',
-		latencyMs: null,
-		checkedAt: '',
-	});
 
-	// Authentication check
 	useEffect(() => {
-		const isLoggedIn = sessionStorage.getItem('agent_logged_in') === 'true';
-		if (!isLoggedIn) {
-			router.push('/agent/login');
-			return;
-		}
-
-		const email = sessionStorage.getItem('agent_email') || 'expert@sona.com';
-		const role = sessionStorage.getItem('agent_role') || 'expert';
-		setAgentEmail(email);
-		setAgentRole(role);
+		const checkAuth = async () => {
+			try {
+				const res = await fetch('/api/auth/me');
+				if (res.ok) {
+					const data = await res.json();
+					if (data.user.role !== 'expert' && data.user.role !== 'admin') {
+						router.push('/login');
+					}
+					setAgentEmail(data.user.email);
+					setAgentRole(data.user.role);
+				} else {
+					router.push('/login');
+				}
+			} catch (e) {
+				router.push('/login');
+			}
+		};
+		checkAuth();
 	}, [router]);
-
-	// DB status check — runs once on mount then every 10 seconds
-	const checkDbStatus = async () => {
-		try {
-			const res = await fetch('/api/db-status');
-			if (!res.ok) throw new Error('Failed to reach DB status API');
-			const data: DbStatus = await res.json();
-			setDbStatus(data);
-		} catch {
-			setDbStatus(prev => ({
-				...prev,
-				connected: false,
-				status: 'error',
-				message: 'Could not reach status endpoint.',
-				checkedAt: new Date().toISOString(),
-			}));
-		}
-	};
-
-	useEffect(() => {
-		checkDbStatus();
-		const interval = setInterval(checkDbStatus, 10000);
-		return () => clearInterval(interval);
-	}, []);
 
 	// Fetch sessions list from API
 	const fetchSessions = async (selectFirst = false) => {
 		try {
 			const res = await fetch('/api/live-agent/list');
-			if (!res.ok) return;
+			if (!res.ok) throw new Error('DB connection failed');
 			const list: ChatSession[] = await res.json();
 			setSessions(list);
+			setDbError(null);
 			setLastSyncTime(new Date().toLocaleString());
 
 			if (list.length > 0) {
@@ -91,17 +73,26 @@ export default function AgentDashboard() {
 				setActiveSession(null);
 			}
 		} catch (error) {
-			// Silent error catch
+			console.error('Error fetching sessions list:', error);
+			setDbError("Unable to connect to the database. Please check your connection.");
 		}
 	};
 
-	// Poll sessions list every 2 seconds
+	// Real-time Socket.io updates for sessions
 	useEffect(() => {
 		fetchSessions(true);
-		const interval = setInterval(() => {
+		const socket = getSocket();
+		socket.emit('join_admin');
+
+		const handleUpdate = () => {
 			fetchSessions();
-		}, 2000);
-		return () => clearInterval(interval);
+		};
+
+		socket.on('session_updated', handleUpdate);
+		
+		return () => {
+			socket.off('session_updated', handleUpdate);
+		};
 	}, [selectedSessionId]);
 
 	// Fetch selected session detail
@@ -151,18 +142,29 @@ export default function AgentDashboard() {
 		}
 	};
 
-	// Fetch messages of selected session on active session change
-	useEffect(() => {
-		fetchActiveSessionDetail();
-	}, [selectedSessionId]);
-
-	// Poll active session details every 1 second for real-time messaging
+	// Fetch initial messages and listen for updates via socket
 	useEffect(() => {
 		if (!selectedSessionId) return;
-		const interval = setInterval(() => {
-			fetchActiveSessionDetail();
-		}, 1000);
-		return () => clearInterval(interval);
+		
+		fetchActiveSessionDetail();
+		
+		const socket = getSocket();
+		// Also join the specific session room to get targeted messages
+		socket.emit('join_session', selectedSessionId);
+
+		const handleNewMessage = (data: any) => {
+			if (data?.sessionId === selectedSessionId) {
+				fetchActiveSessionDetail();
+			}
+		};
+
+		socket.on('new_message', handleNewMessage);
+		socket.on('status_updated', handleNewMessage);
+		
+		return () => {
+			socket.off('new_message', handleNewMessage);
+			socket.off('status_updated', handleNewMessage);
+		};
 	}, [selectedSessionId]);
 
 	// Scroll to bottom of conversation window ONLY when new messages arrive
@@ -259,9 +261,9 @@ export default function AgentDashboard() {
 		}
 	};
 
-	const handleLogout = () => {
-		sessionStorage.clear();
-		router.push('/agent/login');
+	const handleLogout = async () => {
+		await fetch('/api/auth/logout', { method: 'POST' });
+		router.push('/login');
 	};
 
 	// Filters
@@ -297,6 +299,17 @@ export default function AgentDashboard() {
 	return (
 		<div className="min-h-screen bg-gradient-to-br from-slate-100 to-slate-200 dark:from-zinc-950 dark:to-zinc-900 flex flex-col font-sans text-slate-800 dark:text-zinc-100">
 			
+			{/* DB Error Banner */}
+			{dbError && (
+				<div className="absolute top-4 left-1/2 -translate-x-1/2 z-[100] bg-rose-500 text-white px-6 py-3 rounded-full shadow-lg flex items-center gap-3 animate-in fade-in slide-in-from-top-4">
+					<DatabaseIcon className="w-5 h-5" />
+					<span className="text-sm font-bold">{dbError}</span>
+					<button onClick={() => setDbError(null)} className="ml-2 bg-rose-600 rounded-full p-1 hover:bg-rose-700">
+						<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+					</button>
+				</div>
+			)}
+
 			{/* Grid workspace */}
 			<div className="flex-1 flex flex-col md:flex-row overflow-hidden max-w-[1920px] mx-auto w-full">
 				
@@ -349,62 +362,6 @@ export default function AgentDashboard() {
 								</div>
 								<div className="text-2xl font-black text-slate-800 dark:text-zinc-100 leading-none">
 									{totalQueueCount}
-								</div>
-							</div>
-
-							{/* DB STATUS CARD */}
-							<div
-								title={dbStatus.message}
-								onClick={checkDbStatus}
-								className={`p-3.5 rounded-2xl text-left shadow-sm hover:shadow-md transition-all cursor-pointer backdrop-blur-md border ${
-									dbStatus.status === 'checking'
-										? 'bg-white/80 dark:bg-zinc-800/80 border-slate-200/60 dark:border-zinc-700/60'
-										: dbStatus.connected && dbStatus.status === 'ready'
-											? 'bg-emerald-50/80 dark:bg-emerald-950/40 border-emerald-200/60 dark:border-emerald-800/50'
-											: dbStatus.connected && dbStatus.status === 'no_tables'
-												? 'bg-amber-50/80 dark:bg-amber-950/40 border-amber-200/60 dark:border-amber-800/50'
-												: 'bg-rose-50/80 dark:bg-rose-950/40 border-rose-200/60 dark:border-rose-800/50'
-								}`}
-							>
-								<div className="flex items-center justify-between mb-2">
-									<div className="flex items-center gap-1.5">
-										<DatabaseIcon className={`w-3.5 h-3.5 ${
-											dbStatus.status === 'checking' ? 'text-slate-400'
-											: dbStatus.connected && dbStatus.status === 'no_tables' ? 'text-amber-500'
-											: dbStatus.connected ? 'text-emerald-500'
-											: 'text-rose-500'
-										}`} />
-										<div className="text-[9px] font-bold text-slate-400 dark:text-zinc-500 uppercase tracking-wider">Storage</div>
-									</div>
-									<span className="relative flex h-2 w-2">
-										{dbStatus.status === 'checking' ? (
-											<span className="relative inline-flex rounded-full h-2 w-2 bg-slate-300 animate-pulse" />
-										) : dbStatus.connected ? (
-											<>
-												<span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-													dbStatus.status === 'no_tables' ? 'bg-amber-400' : 'bg-emerald-400'
-												}`} />
-												<span className={`relative inline-flex rounded-full h-2 w-2 ${
-													dbStatus.status === 'no_tables' ? 'bg-amber-500' : 'bg-emerald-500'
-												}`} />
-											</>
-										) : (
-											<span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500" />
-										)}
-									</span>
-								</div>
-								
-								<div className={`text-[11px] font-bold mt-1 ${
-									dbStatus.status === 'checking' ? 'text-slate-500'
-									: dbStatus.connected && dbStatus.status === 'ready' ? 'text-emerald-700 dark:text-emerald-400'
-									: dbStatus.connected ? 'text-amber-700 dark:text-amber-400'
-									: 'text-rose-600 dark:text-rose-400'
-								}`}>
-									{dbStatus.status === 'checking' && 'Checking...'}
-									{dbStatus.status === 'ready' && 'Ready'}
-									{dbStatus.status === 'no_tables' && 'Missing Tables'}
-									{dbStatus.status === 'misconfigured' && 'Offline'}
-									{dbStatus.status === 'error' && 'Disconnected'}
 								</div>
 							</div>
 						</div>
@@ -479,9 +436,14 @@ export default function AgentDashboard() {
 						)}
 					</div>
 					
-					<div className="p-4 border-t border-slate-200/50 dark:border-zinc-800/50 text-[10px] text-slate-400 text-center flex justify-between items-center">
-						<span>v2.0 • Last sync: {lastSyncTime.split(',')[1] || 'Loading...'}</span>
-						<a href="/api/live-agent/report" download className="hover:text-[#003859] transition-colors flex items-center gap-1">
+					<div className="p-4 border-t border-slate-200/50 dark:border-zinc-800/50 text-[10px] text-slate-400 text-center flex flex-col gap-2">
+						<div className="flex justify-between items-center">
+							<span>v2.0 • {lastSyncTime ? `Last sync: ${lastSyncTime.split(',')[1]}` : 'Syncing...'}</span>
+							<button onClick={() => fetchSessions(false)} className="hover:text-[#003859] transition-colors flex items-center gap-1">
+								<RefreshCwIcon className="w-3 h-3" /> Refresh
+							</button>
+						</div>
+						<a href="/api/live-agent/report" download className="hover:text-[#003859] transition-colors flex items-center gap-1 justify-center">
 							Export CSV <ArrowRightIcon className="w-3 h-3" />
 						</a>
 					</div>
@@ -523,8 +485,8 @@ export default function AgentDashboard() {
 								</div>
 							</div>
 
-							{/* Chat Conversation Thread */}
-							<div className="flex-1 overflow-y-auto px-8 pt-8 pb-32 space-y-6 scrollbar-thin">
+							{/* Chat Messages */}
+							<div className="flex-1 overflow-y-auto p-6 relative z-10 flex flex-col gap-2 pb-28">
 								{activeSession.messages && activeSession.messages.length > 0 ? (
 									activeSession.messages.map((msg, idx) => {
 										const isAgent = msg.sender === 'agent';
@@ -592,33 +554,29 @@ export default function AgentDashboard() {
 							{/* Floating Chat Composer */}
 							{activeSession.status !== 'resolved' ? (
 								<div className="absolute bottom-6 left-6 right-6 z-30">
-									<form
-										onSubmit={handleSendReply}
-										className="bg-white/90 dark:bg-zinc-800/90 backdrop-blur-xl border border-slate-200/60 dark:border-zinc-700/60 shadow-[0_8px_32px_rgba(0,0,0,0.08)] rounded-full p-2 flex items-center gap-2 max-w-4xl mx-auto transition-all focus-within:shadow-[0_8px_40px_rgba(0,56,89,0.15)] dark:focus-within:shadow-[0_8px_40px_rgba(14,165,233,0.15)]"
+									<form 
+										onSubmit={handleSendReply} 
+										className="bg-white/95 backdrop-blur-xl border border-slate-200/80 shadow-[0_8px_30px_rgba(0,0,0,0.06)] rounded-full p-2 flex items-center gap-3 max-w-4xl mx-auto transition-all focus-within:shadow-[0_8px_40px_rgba(0,56,89,0.12)] focus-within:ring-1 focus-within:ring-[#003859]/10"
 									>
-										<input
-											type="text"
+										<input 
+											type="text" 
 											value={replyText}
-											onChange={(e) => setReplyText(e.target.value)}
-											placeholder="Type your reply to the student..."
-											className="flex-1 bg-transparent px-6 py-3 text-[13px] text-slate-800 dark:text-zinc-100 placeholder-slate-400 focus:outline-none"
+											onChange={e => setReplyText(e.target.value)}
+											placeholder="Type your reply..." 
+											className="flex-1 bg-transparent px-5 py-3 text-[14px] text-slate-800 placeholder-slate-400 font-medium focus:outline-none"
 										/>
-										<button
-											type="submit"
+										<button 
+											type="submit" 
 											disabled={sending || !replyText.trim()}
-											className="w-11 h-11 rounded-full bg-gradient-to-r from-[#003859] to-sky-700 text-white flex items-center justify-center hover:shadow-lg hover:scale-105 active:scale-95 transition-all disabled:opacity-50 cursor-pointer shrink-0"
+											className="w-11 h-11 rounded-full bg-gradient-to-r from-[#003859] to-sky-600 text-white flex items-center justify-center hover:shadow-lg hover:scale-105 active:scale-95 transition-all disabled:opacity-50 cursor-pointer shrink-0"
 										>
-											{sending ? (
-												<Loader2Icon className="w-4 h-4 animate-spin" />
-											) : (
-												<SendIcon className="w-4 h-4 ml-0.5" />
-											)}
+											{sending ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <ArrowUpIcon className="w-5 h-5" />}
 										</button>
 									</form>
 								</div>
 							) : (
 								<div className="absolute bottom-6 left-6 right-6 z-30 max-w-4xl mx-auto">
-									<div className="p-4 bg-slate-100/90 dark:bg-zinc-900/90 backdrop-blur-md border border-slate-200 dark:border-zinc-800 rounded-full text-center text-xs text-slate-500 font-bold shadow-lg">
+									<div className="p-4 bg-[#202022]/90 backdrop-blur-md border border-white/5 rounded-full text-center text-xs text-zinc-400 font-bold shadow-lg uppercase tracking-widest">
 										This conversation has been resolved.
 									</div>
 								</div>

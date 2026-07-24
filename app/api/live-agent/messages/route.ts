@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { LiveChatDb } from '@/lib/live-chat-db';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
 	const { searchParams } = new URL(request.url);
 	const sessionId = searchParams.get('sessionId');
@@ -25,20 +27,24 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
 	try {
 		const body = await request.json();
-		const { sessionId, sender, senderName, text } = body;
+		const BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8000';
+		
+		const res = await fetch(`${BACKEND_URL}/api/livechat/messages`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body)
+		});
 
-		if (!sessionId || !sender || !senderName || !text) {
-			return NextResponse.json({ error: 'Missing required fields (sessionId, sender, senderName, text)' }, { status: 400 });
+		if (!res.ok) {
+			const text = await res.text();
+			console.error("Backend Error in messages:", text);
+			return NextResponse.json({ error: 'Backend failed to add message' }, { status: res.status });
 		}
 
-		const message = await LiveChatDb.addMessage(sessionId, sender, senderName, text);
-		if (!message) {
-			return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-		}
-
-		return NextResponse.json(message);
+		const data = await res.json();
+		return NextResponse.json(data.message || data);
 	} catch (error) {
-		console.error("Error in messages API route:", error);
+		console.error("Error proxying messages API route to backend:", error);
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
 	}
 }

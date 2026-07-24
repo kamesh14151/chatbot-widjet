@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { signToken } from '@/lib/auth';
 
 // Credentials are read from server-side env vars — never exposed to client
 const CREDENTIALS: Record<string, { password: string; email: string }> = {
@@ -15,19 +16,45 @@ const CREDENTIALS: Record<string, { password: string; email: string }> = {
 export async function POST(request: Request) {
 	try {
 		const body = await request.json();
-		const { password, role } = body as { password: string; role: 'expert' | 'admin' };
+		const { email, password } = body as { email: string; password: string };
 
-		if (!password || !role) {
-			return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+		if (!email || !password) {
+			return NextResponse.json({ error: 'Missing email or password' }, { status: 400 });
 		}
 
-		const creds = CREDENTIALS[role];
-		if (!creds) {
-			return NextResponse.json({ error: 'Invalid role' }, { status: 400 });
+		// Find role by email
+		let role: 'expert' | 'admin' | null = null;
+		let creds = null;
+
+		if (email === CREDENTIALS.admin.email) {
+			role = 'admin';
+			creds = CREDENTIALS.admin;
+		} else if (email === CREDENTIALS.expert.email) {
+			role = 'expert';
+			creds = CREDENTIALS.expert;
+		}
+
+		if (!role || !creds) {
+			return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
 		}
 
 		if (password === creds.password) {
-			return NextResponse.json({ success: true, email: creds.email, role });
+			const token = await signToken({ email: creds.email, role });
+
+			const response = NextResponse.json({ success: true, email: creds.email, role });
+			
+			// Set HttpOnly cookie
+			response.cookies.set({
+				name: 'auth_token',
+				value: token,
+				httpOnly: true,
+				secure: process.env.NODE_ENV === 'production',
+				sameSite: 'lax',
+				path: '/',
+				maxAge: 60 * 60 * 24 // 1 day
+			});
+
+			return response;
 		}
 
 		return NextResponse.json({ error: 'Incorrect password.' }, { status: 401 });

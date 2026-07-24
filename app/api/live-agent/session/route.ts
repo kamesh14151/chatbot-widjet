@@ -75,25 +75,24 @@ export async function POST(request: NextRequest) {
 		// ─────────────────────────────────────────────────────
 
 		const body = await request.json();
-		const { sessionId, name, email, phone } = body;
+		const BACKEND_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8000';
 
-		if (!sessionId || !name || !email || !phone) {
-			return NextResponse.json(
-				{ error: 'Missing required fields (sessionId, name, email, phone)' },
-				{ status: 400 }
-			);
+		const res = await fetch(`${BACKEND_URL}/api/livechat/session`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body)
+		});
+
+		if (!res.ok) {
+			const text = await res.text();
+			console.error("Backend Error in session init:", text);
+			return NextResponse.json({ error: 'Backend failed to create session' }, { status: res.status });
 		}
 
-		// If session already exists and is NOT resolved, return it (session resume)
-		const existingSession = await LiveChatDb.getSession(sessionId);
-		if (existingSession && existingSession.status !== 'resolved') {
-			return NextResponse.json(existingSession);
-		}
-
-		const session = await LiveChatDb.createSession(sessionId, name, email, phone);
-		return NextResponse.json(session);
+		const data = await res.json();
+		return NextResponse.json(data.data || data);
 	} catch (error) {
-		console.error('Error in session API route:', error);
+		console.error('Error proxying session API route to backend:', error);
 		return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
 	}
 }

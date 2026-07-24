@@ -84,13 +84,20 @@ export default function AdminPanel() {
 		checkedAt: '',
 	});
 
-	// Auth guard — admin only
+	// Auth guard — now handled by middleware, but we fetch user data here
 	useEffect(() => {
-		const isLoggedIn = sessionStorage.getItem('agent_logged_in') === 'true';
-		if (!isLoggedIn) { router.push('/admin/login'); return; }
-		const role = sessionStorage.getItem('agent_role') || 'expert';
-		if (role !== 'admin') { router.push('/admin/login'); return; }
-		setAgentRole(role);
+		const checkAuth = async () => {
+			try {
+				const res = await fetch('/api/auth/me');
+				if (res.ok) {
+					const data = await res.json();
+					setAgentRole(data.user.role);
+				}
+			} catch (e) {
+				// Ignore, middleware handles redirects
+			}
+		};
+		checkAuth();
 	}, [router]);
 
 	const showToast = (type: 'success' | 'error', message: string) => {
@@ -272,7 +279,10 @@ export default function AdminPanel() {
 						<DownloadIcon className="w-3.5 h-3.5" /> Export CSV
 					</a>
 					<button
-						onClick={() => { sessionStorage.clear(); router.push('/admin/login'); }}
+						onClick={async () => { 
+							await fetch('/api/auth/logout', { method: 'POST' }); 
+							router.push('/login'); 
+						}}
 						className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200/60 rounded-full transition-all cursor-pointer shadow-sm hover:shadow-md hover:-translate-y-0.5 active:translate-y-0"
 					>
 						<PowerIcon className="w-3.5 h-3.5" /> Logout

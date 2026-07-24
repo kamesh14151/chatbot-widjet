@@ -1,6 +1,7 @@
 import React, { FC, useEffect, useRef, useState } from 'react';
 import { useLiveChatStore, LiveMessage } from '@/lib/live-chat-store';
-import { SendIcon, Loader2Icon, UserIcon, ArrowLeftIcon } from 'lucide-react';
+import { ArrowUpIcon, Loader2Icon, UserIcon, ArrowLeftIcon } from 'lucide-react';
+import { getSocket } from '@/lib/socket';
 
 export const LiveAgentChat: FC = () => {
 	const {
@@ -17,13 +18,29 @@ export const LiveAgentChat: FC = () => {
 	const [sending, setSending] = useState(false);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 
-	// Poll session state every 2 seconds
+	// Socket.io integration to replace polling
 	useEffect(() => {
-		fetchSessionState();
-		const interval = setInterval(() => {
+		const socket = getSocket();
+		const sid = useLiveChatStore.getState().sessionId;
+
+		if (sid) {
+			socket.emit('join_session', sid);
+		}
+
+		const handleUpdate = () => {
 			fetchSessionState();
-		}, 2000);
-		return () => clearInterval(interval);
+		};
+
+		socket.on('new_message', handleUpdate);
+		socket.on('status_updated', handleUpdate);
+
+		// Initial fetch just in case
+		fetchSessionState();
+
+		return () => {
+			socket.off('new_message', handleUpdate);
+			socket.off('status_updated', handleUpdate);
+		};
 	}, [fetchSessionState]);
 
 	// Auto-scroll to bottom when messages change
@@ -143,29 +160,31 @@ export const LiveAgentChat: FC = () => {
 
 			{/* Message Composer Area */}
 			{sessionStatus !== 'resolved' && (
-				<form
-					onSubmit={handleSend}
-					className="p-3 border-t border-slate-100 dark:border-zinc-900 bg-white dark:bg-zinc-950 flex items-center gap-2"
-				>
-					<input
-						type="text"
-						value={inputText}
-						onChange={(e) => setInputText(e.target.value)}
-						placeholder="Reply to the expert..."
-						className="flex-1 bg-slate-50 dark:bg-zinc-900 border border-slate-100 dark:border-zinc-800 rounded-full px-4 py-2 text-xs text-slate-800 dark:text-zinc-100 focus:outline-none focus:border-[#a82229] dark:focus:border-[#a82229]/50 transition-colors"
-					/>
-					<button
-						type="submit"
-						disabled={sending || !inputText.trim()}
-						className="w-8 h-8 rounded-full bg-[#003859] text-white flex items-center justify-center hover:opacity-90 active:scale-95 transition-all disabled:opacity-40 cursor-pointer shrink-0"
+				<div className="p-3 bg-slate-50 dark:bg-zinc-950">
+					<form
+						onSubmit={handleSend}
+						className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-xl border border-slate-200/80 dark:border-zinc-800 shadow-[0_4px_20px_rgba(0,0,0,0.05)] rounded-full p-1.5 flex items-center gap-2 transition-all focus-within:shadow-[0_4px_25px_rgba(0,56,89,0.12)] focus-within:ring-1 focus-within:ring-[#003859]/10"
 					>
-						{sending ? (
-							<Loader2Icon className="w-3.5 h-3.5 animate-spin" />
-						) : (
-							<SendIcon className="w-3.5 h-3.5" />
-						)}
-					</button>
-				</form>
+						<input
+							type="text"
+							value={inputText}
+							onChange={(e) => setInputText(e.target.value)}
+							placeholder="Type your reply..."
+							className="flex-1 bg-transparent px-4 py-2 text-[13px] text-slate-800 dark:text-zinc-100 placeholder-slate-400 font-medium focus:outline-none"
+						/>
+						<button
+							type="submit"
+							disabled={sending || !inputText.trim()}
+							className="w-9 h-9 rounded-full bg-gradient-to-r from-[#003859] to-sky-600 text-white flex items-center justify-center hover:shadow-md hover:scale-105 active:scale-95 transition-all disabled:opacity-50 cursor-pointer shrink-0"
+						>
+							{sending ? (
+								<Loader2Icon className="w-3.5 h-3.5 animate-spin" />
+							) : (
+								<ArrowUpIcon className="w-4 h-4" />
+							)}
+						</button>
+					</form>
+				</div>
 			)}
 		</div>
 	);
