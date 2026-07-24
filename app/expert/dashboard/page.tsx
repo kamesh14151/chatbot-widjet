@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { signOut } from 'next-auth/react';
 import { 
 	SearchIcon, Loader2Icon, SendIcon, CheckCircleIcon, 
 	DatabaseIcon, LogOutIcon, MessageSquareIcon, HeadsetIcon,
@@ -160,10 +161,7 @@ export default function ExpertDashboard() {
 		setActiveSession(null);
 	};
 
-	const handleLogout = async () => {
-		await fetch('/api/auth/logout', { method: 'POST' });
-		router.push('/login');
-	};
+	const handleLogout = () => signOut({ callbackUrl: '/login' });
 
 	const filteredSessions = sessions.filter(s => {
 		const q = searchQuery.toLowerCase();
