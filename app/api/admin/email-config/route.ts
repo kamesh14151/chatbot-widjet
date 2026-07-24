@@ -6,7 +6,7 @@ import { getMongoDb } from '@/lib/mongodb';
 const CONFIG_FILE = path.join(process.cwd(), 'email-config.json');
 
 export interface EmailConfig {
-	provider: 'gmail' | 'smtp';
+	provider: 'brevo' | 'resend';
 	smtpHost: string;
 	smtpPort: string;
 	smtpUser: string;   // Gmail address or SMTP username
@@ -14,18 +14,21 @@ export interface EmailConfig {
 	fromName: string;   // Display name shown in From field
 	// Recipient for lead notifications
 	leadEmailTo: string;
+	// Recipient for waitlist notifications
+	waitlistEmailTo: string;
 	// Email subject prefix
 	subjectPrefix: string;
 }
 
 const DEFAULT_CONFIG: EmailConfig = {
-	provider:      'smtp',
+	provider:      'brevo',
 	smtpHost:      process.env.SMTP_HOST      || 'smtp-relay.brevo.com',
 	smtpPort:      process.env.SMTP_PORT      || '587',
 	smtpUser:      process.env.SMTP_USER      || '',
 	smtpPass:      process.env.SMTP_PASS      || '',
 	fromName:      process.env.EMAIL_FROM_NAME || 'SCALE UWA Assistant',
 	leadEmailTo:   process.env.LEAD_EMAIL_TO  || 'kamesh6592@gmail.com',
+	waitlistEmailTo: process.env.WAITLIST_EMAIL_TO || process.env.LEAD_EMAIL_TO || 'kamesh6592@gmail.com',
 	subjectPrefix: process.env.EMAIL_SUBJECT_PREFIX || 'New User Lead',
 };
 
@@ -97,13 +100,14 @@ export async function POST(request: Request) {
 		const current = await readEmailConfigAsync();
 
 		const updated: EmailConfig = {
-			provider:      body.provider      ?? current.provider ?? 'gmail',
+			provider:      body.provider      ?? current.provider ?? 'brevo',
 			smtpHost:      body.smtpHost      ?? current.smtpHost,
 			smtpPort:      body.smtpPort      ?? current.smtpPort,
 			smtpUser:      body.smtpUser      ?? current.smtpUser,
 			smtpPass:      body.smtpPass      ?? current.smtpPass,
 			fromName:      body.fromName      ?? current.fromName,
 			leadEmailTo:   body.leadEmailTo   ?? current.leadEmailTo,
+			waitlistEmailTo: body.waitlistEmailTo ?? current.waitlistEmailTo,
 			subjectPrefix: body.subjectPrefix ?? current.subjectPrefix,
 		};
 

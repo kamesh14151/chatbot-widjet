@@ -64,16 +64,13 @@ export async function POST(req: NextRequest) {
 		const cfg = await readEmailConfigAsync();
 
 		const apiKey = cfg.smtpPass; // The API key is stored in the smtpPass field
-		const fromName = cfg.fromName || "SCALE UWA Assistant";
 		const leadEmailTo = cfg.leadEmailTo;
 		const subjectPrefix = cfg.subjectPrefix || "New User Lead";
 
-		if (apiKey && apiKey.startsWith('xkeysib') || apiKey.startsWith('xsmtpsib')) {
-			const emailData = {
-				sender: { email: cfg.smtpUser || "no-reply@sonascale.uwa", name: fromName },
-				to: [{ email: leadEmailTo, name: "Admin" }],
-				subject: `${subjectPrefix}: ${name}`,
-				htmlContent: `
+		if (apiKey && leadEmailTo) {
+			const { sendEmail } = await import('@/lib/email');
+			
+			const htmlContent = `
 					<div style="font-family: Arial, sans-serif; padding: 20px;">
 						<h2>New Lead captured in SCALE UWA Chatbot</h2>
 						<p><strong>Name:</strong> ${name}</p>
@@ -85,29 +82,23 @@ export async function POST(req: NextRequest) {
 						<br/>
 						<p style="font-size: 12px; color: #555;">SCALE UWA Live Support System</p>
 					</div>
-				`,
-			};
+				`;
 
-			const brevoRes = await fetch("https://api.brevo.com/v3/smtp/email", {
-				method: "POST",
-				headers: {
-					"Accept": "application/json",
-					"Content-Type": "application/json",
-					"api-key": apiKey
-				},
-				body: JSON.stringify(emailData)
-			});
+			const success = await sendEmail(
+				leadEmailTo,
+				"Admin",
+				`${subjectPrefix}: ${name}`,
+				htmlContent
+			);
 
-			if (!brevoRes.ok) {
-				const errText = await brevoRes.text();
-				console.warn("Brevo API Warning (Email not sent):", errText);
-				// We don't throw an error here, so the student can still connect to the live agent even if admin notifications fail.
+			if (success) {
+				console.log(`Email sent via API to ${leadEmailTo} for lead: ${name}`);
 			} else {
-				console.log(`Email sent via Brevo API to ${leadEmailTo} for lead: ${name}`);
+				console.warn("API Warning (Email not sent). Check credentials.");
 			}
 		} else {
 			console.log("-----------------------------------------");
-			console.log("Lead captured (No Brevo API Key configured):");
+			console.log("Lead captured (No API Key or Lead Email configured):");
 			console.log(`Name: ${name}, Email: ${email}, Phone: ${phone}`);
 			console.log(`IP: ${ip}, Location: ${locationInfo}`);
 			console.log("Configure email in Admin Panel → Email Settings.");

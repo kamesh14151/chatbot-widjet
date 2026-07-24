@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from './lib/auth';
+import { getToken } from 'next-auth/jwt';
 
 // Paths that require authentication
 const PROTECTED_ROUTES = ['/admin', '/expert', '/agent'];
@@ -13,19 +13,24 @@ export async function middleware(req: NextRequest) {
 	const isProtectedRoute = PROTECTED_ROUTES.some(route => pathname.startsWith(route));
 	const isProtectedApi = PROTECTED_APIS.some(route => pathname.startsWith(route));
 
-	const token = req.cookies.get('auth_token')?.value;
-	let payload = null;
+	const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET || "fallback_secret_key" });
+	const payload = token;
 
-	if (token) {
-		payload = await verifyToken(token);
-	}
-
-	// 1. If accessing login while authenticated, redirect to correct dashboard
-	if (pathname === '/login' && payload) {
+	// 1. If accessing login or root while authenticated, redirect to correct dashboard
+	if ((pathname === '/login' || pathname === '/') && payload) {
 		if (payload.role === 'admin') {
 			return NextResponse.redirect(new URL('/admin/dashboard', req.url));
 		}
+		if (payload.role === 'pending') {
+			return NextResponse.redirect(new URL('/waitlist', req.url));
+		}
 		return NextResponse.redirect(new URL('/expert/dashboard', req.url));
+	}
+
+	// 1.5. If accessing /waitlist but they are NOT pending, redirect away
+	if (pathname === '/waitlist') {
+		if (!payload) return NextResponse.redirect(new URL('/login', req.url));
+		if (payload.role !== 'pending') return NextResponse.redirect(new URL('/', req.url));
 	}
 
 	// 2. Protect UI routes
@@ -40,6 +45,9 @@ export async function middleware(req: NextRequest) {
 			return NextResponse.redirect(new URL('/expert/dashboard', req.url));
 		}
 		if ((pathname.startsWith('/expert') || pathname.startsWith('/agent')) && payload.role !== 'expert' && payload.role !== 'admin') {
+			if (payload.role === 'pending') {
+				return NextResponse.redirect(new URL('/waitlist', req.url));
+			}
 			return NextResponse.redirect(new URL('/login', req.url));
 		}
 	}

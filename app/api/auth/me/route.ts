@@ -1,16 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/auth';
+import { getToken } from 'next-auth/jwt';
 
 export async function GET(req: NextRequest) {
-	const token = req.cookies.get('auth_token')?.value;
+	const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET || "fallback_secret_key" });
+	
 	if (!token) {
 		return NextResponse.json({ authenticated: false }, { status: 401 });
 	}
 
-	const payload = await verifyToken(token);
-	if (!payload) {
-		return NextResponse.json({ authenticated: false }, { status: 401 });
-	}
-
-	return NextResponse.json({ authenticated: true, user: payload });
+	return NextResponse.json({ authenticated: true, user: token });
 }

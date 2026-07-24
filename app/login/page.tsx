@@ -1,43 +1,60 @@
 "use client";
 
-import React, { useState, Suspense } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, Suspense, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { EyeIcon, EyeOffIcon } from 'lucide-react';
+import { signIn } from 'next-auth/react';
 
 function LoginForm() {
 	const router = useRouter();
+	const searchParams = useSearchParams();
 	const [email, setEmail] = useState('');
 	const [password, setPassword] = useState('');
 	const [showPass, setShowPass] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState('');
 
+	useEffect(() => {
+		const urlError = searchParams.get('error');
+		if (urlError === 'OAuthSignin' || urlError === 'OAuthCallback') {
+			setError('Microsoft Login failed. Please check your Azure AD configuration.');
+		} else if (urlError === 'CredentialsSignin') {
+			setError('Invalid email or password.');
+		} else if (urlError) {
+			setError('An error occurred during sign in.');
+		}
+	}, [searchParams]);
+
 	const handleLogin = async (e: React.FormEvent) => {
 		e.preventDefault();
 		setLoading(true);
 		setError('');
 		try {
-			const res = await fetch('/api/auth/login', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ email, password }),
+			const res = await signIn('credentials', {
+				redirect: false,
+				email,
+				password,
 			});
-			const data = await res.json();
-			if (!res.ok) { 
-				setError(data.error || 'Invalid credentials.'); 
-				setLoading(false); 
-				return; 
-			}
-			
-			if (data.role === 'admin') {
-				router.push('/admin/dashboard');
+
+			if (res?.error) {
+				setError(res.error);
+				setLoading(false);
 			} else {
-				router.push('/expert/dashboard');
+				// We don't get the role directly back from signIn credentials result in client side easily, 
+				// so we just refresh the page or route to a common dashboard index which redirects, 
+				// or use router.push to the generic dashboard loader.
+				// For now, let's just refresh to let middleware handle the redirection based on role, 
+				// or route to the root and let middleware do it.
+				window.location.href = '/'; 
 			}
 		} catch {
 			setError('Network error. Please try again.');
 			setLoading(false);
 		}
+	};
+
+	const handleMicrosoftLogin = async () => {
+		await signIn('azure-ad', { callbackUrl: '/' });
 	};
 
 	return (
@@ -132,7 +149,8 @@ function LoginForm() {
 							{/* Microsoft Login */}
 							<button
 								type="button"
-								className="w-full border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl transition-colors flex items-center justify-center gap-3 text-sm"
+								onClick={handleMicrosoftLogin}
+								className="w-full border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl transition-colors flex items-center justify-center gap-3 text-sm cursor-pointer"
 							>
 								{/* Microsoft Icon */}
 								<svg width="16" height="16" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 21 21">
