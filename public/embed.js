@@ -1,7 +1,7 @@
 (function () {
   // Determine the URL of the widget based on where this script is loaded from
   const currentScript = document.currentScript;
-  let widgetUrl = "https://chatbot-widjet.vercel.app"; // Default to production URL
+  let widgetUrl = "https://chatbot-widjet-sona-star.vercel.app"; // Default to production URL
 
   if (currentScript && currentScript.src) {
     try {
@@ -17,7 +17,7 @@
 
   // Create the iframe
   const iframe = document.createElement("iframe");
-  iframe.src = widgetUrl;
+  iframe.src = widgetUrl + "/widget";
   iframe.style.position = "fixed";
   iframe.style.bottom = "10px";
   iframe.style.right = "10px";
