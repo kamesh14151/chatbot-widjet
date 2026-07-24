@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { 
 	SearchIcon, Loader2Icon, SendIcon, CheckCircleIcon, 
 	ArrowRightIcon, MessageSquareIcon, RefreshCwIcon, LogOutIcon, HeadsetIcon,
-	PlusIcon, ArrowUpIcon, ImageIcon
+	PlusIcon, ArrowUpIcon, ImageIcon, DatabaseIcon, ShieldIcon, PowerIcon, UsersIcon
 } from 'lucide-react';
 import { ChatSession, ChatMessage } from '@/lib/live-chat-db';
 import { getSocket } from '@/lib/socket';
