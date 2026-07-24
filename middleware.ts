@@ -16,8 +16,8 @@ export async function middleware(req: NextRequest) {
 	const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET || "fallback_secret_key" });
 	const payload = token;
 
-	// 1. If accessing login or root while authenticated, redirect to correct dashboard
-	if ((pathname === '/login' || pathname === '/') && payload) {
+	// 1. If accessing login while authenticated, redirect to correct dashboard
+	if (pathname === '/login' && payload) {
 		if (payload.role === 'admin') {
 			return NextResponse.redirect(new URL('/admin/dashboard', req.url));
 		}
