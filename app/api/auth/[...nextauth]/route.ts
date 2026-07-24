@@ -136,6 +136,19 @@ const handler = NextAuth({
                 session.user.role = token.role as string;
             }
             return session;
+        },
+        async redirect({ url, baseUrl }) {
+            // If going to the base URL or root, redirect based on role is handled by middleware.
+            // But after sign-in NextAuth will call this with url = baseUrl.
+            // We redirect to a special page that then bounces to the right dashboard.
+            if (url === baseUrl || url === `${baseUrl}/`) {
+                return `${baseUrl}/auth/redirect`;
+            }
+            // Allow relative callback URLs
+            if (url.startsWith('/')) return `${baseUrl}${url}`;
+            // Allow same-origin absolute URLs
+            if (new URL(url).origin === baseUrl) return url;
+            return baseUrl;
         }
     },
     pages: {
