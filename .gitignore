@@ -47,3 +47,6 @@ next-env.d.ts
 # local live chat database
 live-chats.json
 email-config.json
+
+# exported sub-package
+widget-export/
