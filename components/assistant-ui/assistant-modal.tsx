@@ -3,7 +3,7 @@ import { XIcon, HeadphonesIcon, RefreshCwIcon, ArrowLeftIcon } from "lucide-reac
 import { forwardRef, useEffect, useState } from "react";
 import { Thread } from "@/components/assistant-ui/thread";
 
-const SCALE_CHAT_URL = "http://161.248.37.193:3002/chat";
+const SCALE_CHAT_URL = "https://161.248.37.193:3002/chat";
 
 const ModalButton = forwardRef<
 	HTMLButtonElement,
