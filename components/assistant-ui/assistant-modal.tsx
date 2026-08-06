@@ -157,8 +157,8 @@ export const AssistantModal = () => {
 								</span>
 							</div>
 
-							{/* Live Expert toggle button (Disabled for now) */}
-							{/* <div className="flex flex-col items-end shrink-0">
+							{/* Live Expert toggle button */}
+							<div className="flex flex-col items-end shrink-0">
 								<button
 									onClick={() => setMode(mode === "live" ? "ai" : "live")}
 									className={`px-3 py-1 rounded-full text-[10px] font-bold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95 ${
@@ -182,7 +182,7 @@ export const AssistantModal = () => {
 								<span className="text-[7.5px] text-slate-400 dark:text-zinc-500 mt-1 leading-none">
 									Available 9AM–5PM IST
 								</span>
-							</div> */}
+							</div>
 						</div>
 					</div>
 					{/* ── END HEADER ─────────────────────────────────── */}
